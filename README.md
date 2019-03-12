@@ -4,7 +4,7 @@ This repository contains a Python Flask application that accepts webhooks from [
 Server](https://www.atlassian.com/software/jira) and forwards them to the specified
 channel, or channels, in a [Mattermost](https://mattermost.com) server via an incoming webhook.
 You can configure the application to post to channels based on JIRA projects and issue type
-as described below in the **Configuration** section.
+as described below in the **Configuration** section or provide the target channel name in the webhook directly (see [JIRA Webhook section](#JIRA Webhook)).
 
 Currently the application supports the following JIRA event types:
 
@@ -67,6 +67,7 @@ changing `debug` to `true`.
 The `features` section allows you to configure how messages map to Mattermost channels based 
 on JIRA project and whether or not the issue is labeled as a bug. The channel mapping has
 the following options:
+
 
 * All messages are sent to the default channel configured in the Mattermost webhook;
 * Messages are mapped to Mattermost channels based on mappings in the `projects.json` file;
@@ -194,9 +195,12 @@ The following steps describe how to setup the JIRA webhook:
 4. Fill in the `New WebHook Listener` form:
     * Enter a name for your webhook;
     * Click on `Enabled` for `Status` to ensure that the webhook fires;
-    * Enter your the address of your running bridge application and append `/${project.key}` to the end 
+    * Webhook URL:
+		* If project to channel mapping is used, enter the address of your running bridge application and append `/${project.key}` to the end 
       (example:` https://bridge.url/jira/${project.key}`) so that JIRA will pass
       the project key via the URL to bridge application.
+		* If the channel is configured in the webhook, enter the address of the bridge application and append `/channel/<channel name>`
+		(example: `https://bridge.url/jira/channel/town-square`)
     * Select the events that you want to send from JIRA to Mattermost (**Note**: only the
       events listed in the introduction above are currently supported however unsupported
       events will not cause application failures.)

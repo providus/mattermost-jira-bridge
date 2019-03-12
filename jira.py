@@ -3,6 +3,7 @@ from flask import request
 import json
 import requests
 import events
+import logging
 
 
 def read_config():
@@ -45,7 +46,8 @@ def get_project_from_json(project_key):
     project_key = project_key.lower()
     with open('projects.json') as project_file:
         d = json.loads(project_file.read())
-    return d["projects"].get(project_key, "")
+    channel_by_project = {k.lower(): v for k, v in d["projects"].items()}
+    return channel_by_project.get(project_key, "")
 
 
 def get_channel(project_key, issue_type):
@@ -69,14 +71,7 @@ def get_channel(project_key, issue_type):
     return channel
 
 
-def send_webhook(project_key, issue_type, text):
-    """
-    Sends the formatted message to the configured
-    Mattermost webhook URL
-    """
-    if len(project_key) > 0:
-        channel = get_channel(project_key, issue_type)
-
+def send_webhook(channel, text, logger):
     data = {
         "channel": channel,
         "username": mattermost_user,
@@ -91,12 +86,25 @@ def send_webhook(project_key, issue_type, text):
     else:
         data["text"] = text
 
+    logger.debug("sending %s" % data)
+
     response = requests.post(
         webhook_url,
         data=json.dumps(data),
         headers={'Content-Type': 'application/json'}
     )
     return response
+
+def send_mapped_project_webhook(project_key, issue_type, text, logger):
+    """
+    Sends the formatted message to the configured
+    Mattermost webhook URL
+    """
+    if len(project_key) == 0:
+        return
+
+    channel = get_channel(project_key, issue_type)
+    send_webhook(channel, text, logger)
 
 
 def user_profile_link(user_id, user_name):
@@ -144,44 +152,25 @@ def format_changelog(changelog_items):
 
 
 def format_message(project_key, project_name, event, user_id, user_name):
-    """
-    """
     message = "" + \
         "**Project**: " + project_link(project_key, project_key) + "\n" \
         "**Action**: " + event + "\n" \
         "**User**: " + user_profile_link(user_id, user_name)
     return message
 
-
-def handle_actions(project_key, data):
-    """
-    """
-    message = ""
-
+def get_jira_event_text(data):
     jira_event = data["webhookEvent"]
-    jira_event_text = events.jira_events.get(jira_event, "")
-    issue_type = ""
+    return events.jira_events.get(jira_event, "")
 
-    if len(jira_event_text) == 0:
-        """
-        Not a supported JIRA event, return None
-        and quietly go away
-        """
-        return None
-
-    if jira_event == "project_created":
-        message = format_message(project_key, data["project"]["name"],
-                                 jira_event_text,
-                                 data["project"]["projectLead"]["key"],
-                                 data["project"]["projectLead"]["displayName"])
-
-    if jira_event.find("issue") > -1:
-        issue_type = data["issue"]["fields"]["issuetype"]["name"]
+def jira_issue_event_to_message(data):
+    jira_event = data["webhookEvent"]
+    issue_type = data["issue"]["fields"]["issuetype"]["name"]
+    project_key = data["issue"]["fields"]["project"]["key"]
 
     if jira_event == "jira:issue_created":
-        message = format_message(project_key,
+        return format_message(project_key,
                                  data["issue"]["fields"]["project"]["name"],
-                                 format_new_issue("New **" + issue_type + "** created for:", 
+                                 format_new_issue("New **" + issue_type + "** created for:",
                                                   project_key,
                                                   data["issue"]["key"],
                                                   data["issue"]["fields"]["summary"].encode('ascii','ignore').strip(),
@@ -193,7 +182,7 @@ def handle_actions(project_key, data):
     if jira_event == "jira:issue_updated":
         issue_event_type = data["issue_event_type_name"]
         if issue_event_type == "issue_generic" or issue_event_type == "issue_updated":
-            message = format_message(project_key,
+            return format_message(project_key,
                                      data["issue"]["fields"]["project"]["name"],
                                      issue_link(project_key, data["issue"]["key"]) + " " + \
                                      format_changelog(data["changelog"]["items"]),
@@ -202,7 +191,7 @@ def handle_actions(project_key, data):
 
         formatted_event_type = events.issue_events.get(issue_event_type, "")
         if issue_event_type == "issue_commented" or issue_event_type == "issue_comment_edited":
-            message = format_message(project_key,
+            return format_message(project_key,
                                      data["issue"]["fields"]["project"]["name"],
                                      issue_link(project_key, data["issue"]["key"]) + " " + \
                                      formatted_event_type + "\n" + \
@@ -214,15 +203,64 @@ def handle_actions(project_key, data):
                                      data["user"]["displayName"])
 
         if issue_event_type == "issue_comment_deleted":
-            message = format_message(project_key,
+            return format_message(project_key,
                                      data["issue"]["fields"]["project"]["name"],
                                      issue_link(project_key, data["issue"]["key"]) + " " + \
                                      formatted_event_type,
                                      data["user"]["key"],
                                      data["user"]["displayName"])
+    return None
 
-    return send_webhook(project_key, issue_type, message)
+def jira_project_event_to_message(data):
+    project_key = data["project"]["key"]
+    jira_event_text = get_jira_event_text(data)
+    return format_message(project_key, data["project"]["name"],
+                             jira_event_text,
+                             data["project"]["projectLead"]["key"],
+                             data["project"]["projectLead"]["displayName"])
 
+def jira_event_to_message(data):
+    jira_event = data["webhookEvent"]
+    jira_event_text = get_jira_event_text(data)
+
+    if len(jira_event_text) == 0:
+        """
+        Not a supported JIRA event, return None
+        and quietly go away
+        """
+        return None
+
+    if jira_event.startswith("jira:issue"):
+        return jira_issue_event_to_message(data)
+
+    if jira_event == "project_created":
+        return jira_project_event_to_message(data)
+
+    return None
+
+def handle_mapped_project_hook(project_key, data, logger):
+    message = jira_event_to_message(data)
+    if message is not None:
+        issue_type = data["issue"]["fields"]["issuetype"]["name"]
+        send_mapped_project_webhook(project_key, issue_type, message, logger)
+    else:
+        logger.info("Received project webhook did not match any known events.")
+
+def handle_channel_hook(channel_name, data, logger):
+    message = jira_event_to_message(data)
+    if message is not None:
+        send_webhook(channel_name, message, logger)
+    else:
+        logger.info("Received channel webhook did not match any known events.")
+
+def get_json(request, logger):
+    request_json = request.get_json()
+    if request_json is None or len(request_json) == 0:
+        app.logger.warning("Received a request with empty or non-JSON body")
+        return None
+    else:
+        app.logger.debug(json.dumps(request_json))
+        return request_json
 
 """
 ------------------------------------------------------------------------------------------
@@ -232,13 +270,28 @@ read_config()
 
 app = Flask(__name__)
 
+@app.before_first_request
+def setup_logging():
+    if not app.debug:
+        app.logger.setLevel(logging.WARN)
 
 @app.route('/jira/<project_key>', methods=['POST'])
-def hooks(project_key):
+def project_webhook(project_key):
+    request_json = get_json(request, app.logger)
+    if request_json is not None:
+        app.logger.info("Received webhook call for project '%s'" % (project_key))
+        handle_mapped_project_hook(project_key, request_json, app.logger)
 
-    if len(request.get_json()) > 0:
-        # print(json.dumps(request.get_json()))
-        handle_actions(project_key, request.get_json())
+    return ""
+
+@app.route('/jira/channel/<channel_name>', methods=['POST'])
+def channel_webhook(channel_name):
+    request_json = get_json(request, app.logger)
+    if request_json is not None:
+        app.logger.info("Received webhook call for channel '%s'" % (channel_name))
+        app.logger.debug(request_json)
+        handle_channel_hook(channel_name, request_json, app.logger)
+
     return ""
 
 if __name__ == '__main__':
