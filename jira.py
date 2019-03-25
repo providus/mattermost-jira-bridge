@@ -145,9 +145,11 @@ def format_changelog(changelog_items):
     if len(changelog_items) > 1:
         output = "\n"
     for item in changelog_items:
+        fromString = item.get("fromString", "-").encode('ascii','ignore').strip()
+        toString = item.get("toString", "-").encode('ascii','ignore').strip()
         output += "Field **" + item["field"] + "** updated from _" + \
-                  item["fromString"].encode('ascii','ignore').strip() + "_ to _" + \
-                  item["toString"].encode('ascii','ignore').strip() + "_\n"
+                  fromString + "_ to _" + \
+                  toString + "_\n"
     return output
 
 
@@ -168,14 +170,18 @@ def jira_issue_event_to_message(data):
     project_key = data["issue"]["fields"]["project"]["key"]
 
     if jira_event == "jira:issue_created":
+        fields = data["issue"].get("fields", {})
+        summary = fields.get("summary", "-")
+        description = fields.get("description", "-")
+        priority = fields.get("priority", {})
         return format_message(project_key,
-                                 data["issue"]["fields"]["project"]["name"],
+                                 fields.get("project", {}).get("name", "-"),
                                  format_new_issue("New **" + issue_type + "** created for:",
                                                   project_key,
                                                   data["issue"]["key"],
-                                                  data["issue"]["fields"]["summary"].encode('ascii','ignore').strip(),
-                                                  data["issue"]["fields"]["description"].encode('ascii','ignore').strip(),
-                                                  data["issue"]["fields"]["priority"]["name"]),
+                                                  summary.encode('ascii', 'ignore').strip(),
+                                                  description.encode('ascii', 'ignore').strip(),
+                                                  priority.get("name", "-")),
                                  data["user"]["key"],
                                  data["user"]["displayName"])
 
