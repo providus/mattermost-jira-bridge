@@ -217,8 +217,9 @@ def read_config():
     global attachment_color
     attachment_color = d["colors"]["attachment"]
 
-    global mattermost_url, mattermost_user, mattermost_icon
-    mattermost_url = d["mattermost"]["webhook"]
+    global mattermost_url, mattermost_user, mattermost_icon, mattermost_default_webhook
+    mattermost_url = d["mattermost"]["url"]
+    mattermost_default_webhook = d["mattermost"]["webhook"]
     mattermost_user = d["mattermost"]["post_user_name"]
     mattermost_icon = d["mattermost"]["post_user_icon"]
 
@@ -229,12 +230,14 @@ def read_config():
                  % (mattermost_url, mattermost_user, mattermost_icon, jira_url))
 
 
-def send_webhook(webhook_url, text, attachment, logger):
+def send_webhook(webhook_url, text, attachment, logger, channel):
     data = {
         'text': text,
         "username": mattermost_user,
         "icon_url": mattermost_icon,
     }
+    if channel is not None:
+        data['channel'] = channel
 
     if attachment is not None:
         data["attachments"] = [attachment.to_dict()]
@@ -442,11 +445,11 @@ def jira_event_to_message(data, logger) -> Message:
     return None
 
 
-def handle_channel_hook(webhook_token, data, logger):
+def handle_channel_hook(webhook_token, data, logger, channel=None):
     message = jira_event_to_message(data, logger)
     if message is not None:
         webhook_url = "%s/hooks/%s" % (mattermost_url, webhook_token)
-        send_webhook(webhook_url, message.text if message.attachment is None else None, message.attachment, logger)
+        send_webhook(webhook_url, message.text if message.attachment is None else None, message.attachment, logger, channel)
     else:
         logger.info("Received Jira event could not be transformed to Mattermost message.")
 
@@ -480,11 +483,21 @@ def setup_logging():
 
 
 @app.route('/hooks/<hook_path>', methods=['POST'])
-def channel_webhook(hook_path):
+def path_webhook(hook_path):
     request_json = get_json(request, app.logger)
     if request_json is not None:
         app.logger.info("Received webhook call for hook '%s'" % (hook_path))
         handle_channel_hook(hook_path, request_json, app.logger)
+
+    return ""
+
+
+@app.route('/channel/<channel>', methods=['POST'])
+def channel_webhook(channel):
+    request_json = get_json(request, app.logger)
+    if request_json is not None:
+        app.logger.info("Received webhook call for channel '%s'" % (channel))
+        handle_channel_hook(mattermost_default_webhook, request_json, app.logger, channel)
 
     return ""
 

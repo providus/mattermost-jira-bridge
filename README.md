@@ -84,7 +84,8 @@ default configured in Mattermost.
 
 ```
 	"mattermost" : {
-		"webhook" : "https://mattermost.url/hooks/webhookid",
+	    "url": "https://mattermost.url",
+		"webhook" : "defaultwebhookid",
 		"post_user_name" : "JIRA",
 		"post_user_icon" : ""
 	}
@@ -112,11 +113,10 @@ The following steps describe how to setup the JIRA webhook:
     * Enter a name for your webhook;
     * Click on `Enabled` for `Status` to ensure that the webhook fires;
     * Webhook URL:
-		* If project to channel mapping is used, enter the address of your running bridge application and append `/${project.key}` to the end 
-      (example:` https://bridge.url/jira/${project.key}`) so that JIRA will pass
-      the project key via the URL to bridge application.
 		* If the channel is configured in the webhook, enter the address of the bridge application and append `/channel/<channel name>`
 		(example: `https://bridge.url/jira/channel/town-square`)
+        * If a separate webhook is configured, enter the address of the bridge application and append `/hooks/<hookid>`
+		(example: `https://bridge.url/jira/hooks/a09safd8aslfkjas0f9`)
     * Select the events that you want to send from JIRA to Mattermost (**Note**: only the
       events listed in the introduction above are currently supported however unsupported
       events will not cause application failures.)

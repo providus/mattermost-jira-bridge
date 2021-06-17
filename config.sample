@@ -8,7 +8,8 @@
 		"attachment" : "#28c12b"
 	},
 	"mattermost" : {
-		"webhook" : "https://mattermost.url/hooks/webhookid",
+	    "url" : "https://mattermost.url",
+        "webhook" : "defaultwebhookid",
 		"post_user_name" : "JIRA",
 		"post_user_icon" : ""
 	},
