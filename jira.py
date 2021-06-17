@@ -6,6 +6,10 @@ import events
 import logging
 
 
+def xstr(s):
+    return '' if s is None else str(s)
+
+
 class Message:
     def __init__(self, text, attachment):
         self.text = text
@@ -36,6 +40,167 @@ class AttachmentField:
         self.title = ''
         self.value = ''
 
+    @classmethod
+    def create(cls, title, value, short=True):
+        field = AttachmentField()
+        field.title = xstr(title)
+        field.value = xstr(value)
+        field.short = short
+        return field
+
+
+class User:
+    def __init__(self):
+        self.avatar = ''
+        self.display_name = ''
+        self.email_address = ''
+        self.key = ''
+        self.name = ''
+
+    @classmethod
+    def from_data(cls, data):
+        u = User()
+        u.avatar = data.get("avatarUrls", {}).get("48x48", "")
+        u.display_name = data.get("displayName", "-")
+        u.email_address = data.get("emailAddress", "")
+        u.key = data['key']
+        u.name = data.get("name", "")
+        return u
+
+    def mm_link(self):
+        return "[" + self.name + "](" + jira_url + \
+               "secure/ViewProfile.jspa?name=" + self.key + ")"
+
+
+class Comment:
+    def __init__(self):
+        self.id = ''
+        self.body = ''
+        self.created = ''
+        self.updated = ''
+        self.author = None
+        self.update_author = None
+
+    @classmethod
+    def from_data(cls, data):
+        c = Comment()
+        c.author = User.from_data(data['author']) if data['author'] is not None else None
+        c.update_author = User.from_data(data['updateAuthor']) if data['updateAuthor'] is not None else None
+        c.id = data['id']
+        c.body = data.get("body", "")
+        c.created = data.get("created", "")
+        c.updated = data.get("updated", "")
+        return c
+
+    def mm_link(self, issue_key):
+        return "[" + self.body + "](" + jira_url + "browse/" + \
+               issue_key + "?focusedCommentId=" + self.id + \
+               "&page=com.atlassian.jira.plugin.system.issuetabpanels%3A" + \
+               "comment-tabpanel#comment-" + self.id + ")"
+
+
+class Issue:
+    def __init__(self):
+        self.assignee = None
+        self.creator = None
+        self.reporter = None
+        self.comments = None
+        self.created = ''
+        self.updated = ''
+        self.description = ''
+        self.environment = ''
+        self.type = ''
+        self.labels = ''
+        self.priority = ''
+        self.project = None
+        self.resolution = ''
+        self.status = ''
+        self.summary = ''
+        self.key = ''
+
+    @classmethod
+    def from_data(cls, data):
+        i = Issue()
+        i.key = data['key']
+        fields = data.get("fields", {})
+        i.assignee = User.from_data(fields['assignee']) if fields['assignee'] is not None else None
+        i.creator = User.from_data(fields['creator']) if fields['creator'] is not None else None
+        i.reporter = User.from_data(fields['reporter']) if fields['reporter'] is not None else None
+        i.comments = [Comment.from_data(c) for c in fields['comment']['comments']]
+        i.created = fields.get("created", "")
+        i.updated = fields.get("updated", "")
+        i.description = xstr(fields.get("description", "")).strip()
+        i.environment = xstr(fields.get("environment", "")).strip()
+        i.type = fields.get("issuetype", {}).get("name", "-")
+        i.labels = fields.get("labels", "-")
+        i.priority = str(fields.get("priority", {}).get("name", ""))
+        i.project = Project.from_data(fields['project']) if fields['project'] is not None else None
+        i.resolution = str(fields.get("resolution", ""))
+        i.status = str(fields.get("status", {}).get("name", ""))
+        i.summary = xstr(fields.get("summary", "")).strip()
+        return i
+
+    def mm_link(self):
+        link = jira_url + "projects/" + self.project.key + "/issues/" + self.key
+        return "[%s %s](%s)" % (self.key, self.summary, link)
+
+
+class Project:
+    def __init__(self):
+        self.id = ''
+        self.key = ''
+        self.name = ''
+        self.project_lead = None
+
+    @classmethod
+    def from_data(cls, data):
+        p = Project()
+        p.id = data['id']
+        p.key = data['key']
+        p.name = data['name']
+        p.project_lead = User.from_data(data.get("projectLead", {})) if data.get("projectLead", None) is not None else None
+        return p
+
+    def mm_link(self):
+        return "[" + self.name + "](" + jira_url + "projects/" + \
+               self.key + ")"
+
+
+class Changelog:
+    def __init__(self):
+        self.items = None
+
+    def description(self):
+        output = ""
+        if len(self.items) > 1:
+            output = "\n"
+        for item in self.items:
+            output += "Field **" + item.field + "** updated from _" + \
+                      item.from_string + "_ to _" + \
+                      item.to_string + "_\n"
+        return output
+
+    @classmethod
+    def from_data(cls, data):
+        changelog = Changelog()
+        changelog.items = [ChangelogItem.from_data(i) for i in data['items']]
+        return changelog
+
+
+class ChangelogItem:
+    def __init__(self):
+        self.field = ''
+        self.from_string = ''
+        self.to_string = ''
+
+    @classmethod
+    def from_data(cls, data):
+        item = ChangelogItem()
+        item.field = data['field']
+        item.from_string = data.get("fromString", "") if data.get("fromString", "<empty>") is not None else "<empty>"
+        item.to_string = data.get("toString", "") if data.get("toString", "<empty>") is not None else "<empty>"
+        return item
+
 
 def read_config():
     """
@@ -60,6 +225,9 @@ def read_config():
     global jira_url
     jira_url = d["jira"]["url"]
 
+    logging.info("Using settings url(%s) user(%s) icon(%s) jira_url(%s)"
+                 % (mattermost_url, mattermost_user, mattermost_icon, jira_url))
+
 
 def send_webhook(webhook_url, text, attachment, logger):
     data = {
@@ -71,214 +239,225 @@ def send_webhook(webhook_url, text, attachment, logger):
     if attachment is not None:
         data["attachments"] = [attachment.to_dict()]
 
-    logger.debug("sending %s" % data)
+    logger.debug("sending: %s" % data)
+    logger.debug("to url: %s" % webhook_url)
 
     response = requests.post(
         webhook_url,
         data=json.dumps(data),
-        headers={'Content-Type': 'application/json'}
+        headers={'Content-Type': 'application/json',
+                 'charset': 'UTF-8'}
     )
+
+    logger.debug("got response: %s" % response.text)
     return response
 
 
-def user_profile_link(user_id, user_name):
-    return "[" + user_name + "](" + jira_url + \
-           "secure/ViewProfile.jspa?name=" + user_id + ")"
-
-
-def project_link(project_name, project_key):
-    return "[" + project_name + "](" + jira_url + "projects/" + \
-           project_key + ")"
-
-
-def issue_link(project_key, issue_key, summary):
-    link = jira_url + "projects/" + project_key + "/issues/" + issue_key
-    return "[%s %s](%s)" % (issue_key, summary, link)
-
-
-def comment_link(comment, issue_id, comment_id):
-    return "[" + comment + "](" + jira_url + "browse/" + \
-           issue_id + "?focusedCommentId=" + comment_id + \
-           "&page=com.atlassian.jira.plugin.system.issuetabpanels%3A" + \
-           "comment-tabpanel#comment-" + comment_id + ")"
-
-
-def format_new_issue_text(event, project_key, issue_key, summary, description, priority):
+def format_fallback_text(project, event, user):
     return "" + \
-           event + " " + issue_link(project_key, issue_key, summary) + "\n" \
-        "**Summary**: " + summary + " (_" + priority + "_)\n" \
-        "**Description**: " + description
-
-def format_changelog(changelog_items):
-    """
-    The changelog can record 1+ changes to an issue
-    """
-    output = ""
-    if len(changelog_items) > 1:
-        output = "\n"
-    for item in changelog_items:
-        fromString = str(item.get("fromString", "-").encode('ascii', 'ignore').strip())
-        toString = str(item.get("toString", "-").encode('ascii', 'ignore').strip())
-        output += "Field **" + item["field"] + "** updated from _" + \
-                  fromString + "_ to _" + \
-                  toString + "_\n"
-    return output
+           "**Project**: " + project.name + "\n" \
+           "**Action**: " + event + "\n" \
+           "**User**: " + user.display_name
 
 
-def format_text(project_key, project_name, event, user_id, user_name):
+def format_text(project, event, user):
     return "" + \
-            "**Project**: " + project_link(project_name, project_key) + "\n" \
-            "**Action**: " + event + "\n" \
-            "**User**: " + user_profile_link(user_id, user_name)
+           "**Project**: " + project.mm_link() + "\n" \
+           "**Action**: " + event + "\n" + \
+           "**User**: " + user.mm_link()
 
-def get_jira_event_text(data):
-    jira_event = data["webhookEvent"]
+
+def get_jira_event_text(jira_event):
     return events.jira_events.get(jira_event, "")
 
 
-def jira_issue_event_to_message(data) -> Message:
+def is_jira_event_supported(jira_event):
+    return events.jira_events.get(jira_event, "") != ""
+
+
+def jira_issue_created_to_message(issue, user) -> Message:
+    attachment = Attachment()
+    attachment.pretext = "New issue created %s in %s by %s" \
+                         % (issue.mm_link(),
+                            issue.project.mm_link(),
+                            user.mm_link())
+    attachment.color = attachment_color
+
+    attachment.fallback = format_fallback_text(issue.project,
+                                               "New issue created %s %s" % (issue.key, issue.summary),
+                                               user)
+    attachment.text = issue.description
+    attachment.fields.append(AttachmentField.create("Type", issue.type))
+    attachment.fields.append(AttachmentField.create("Priority", issue.priority))
+    if issue.creator:
+        attachment.fields.append(AttachmentField.create("Creator", issue.creator.display_name))
+    if issue.assignee:
+        attachment.fields.append(AttachmentField.create("Assignee", issue.assignee.display_name))
+
+    return Message(None, attachment)
+
+
+def jira_issue_assigned_to_message(issue, user) -> Message:
+    attachment = Attachment()
+    attachment.pretext = "Assigned %s in %s by %s" \
+                         % (issue.mm_link(),
+                            issue.project.mm_link(),
+                            user.mm_link())
+    attachment.color = attachment_color
+
+    attachment.fallback = format_fallback_text(issue.project,
+                                               "Issue assigned %s %s" % (issue.key, issue.summary),
+                                               user)
+    attachment.text = issue.description
+    attachment.fields.append(AttachmentField.create("Type", issue.type))
+    attachment.fields.append(AttachmentField.create("Priority", issue.priority))
+    if issue.creator:
+        attachment.fields.append(AttachmentField.create("Creator", issue.creator.display_name))
+    if issue.assignee:
+        attachment.fields.append(AttachmentField.create("Assignee", issue.assignee.display_name))
+
+    return Message(None, attachment)
+
+
+def jira_issue_commented_to_message(issue, comment, user) -> Message:
+    attachment = Attachment()
+    attachment.pretext = "%s %s in %s by %s" \
+                         % ("Comment added",
+                            issue.mm_link(),
+                            issue.project.mm_link(),
+                            user.mm_link())
+    attachment.color = attachment_color
+
+    attachment.fallback = format_fallback_text(issue.project,
+                                               "Issue commented %s %s" % (issue.key, issue.summary),
+                                               user)
+    attachment.text = comment.body
+    attachment.fields.append(AttachmentField.create("Type", issue.type))
+    attachment.fields.append(AttachmentField.create("Priority", issue.priority))
+    if issue.creator:
+        attachment.fields.append(AttachmentField.create("Creator", issue.creator.display_name))
+    if issue.assignee:
+        attachment.fields.append(AttachmentField.create("Assignee", issue.assignee.display_name))
+
+    return Message(None, attachment)
+
+
+def jira_issue_comment_deleted_to_message(issue, user) -> Message:
+    attachment = Attachment()
+    attachment.pretext = "%s %s in %s by %s" \
+                         % ("Comment deleted",
+                            issue.mm_link(),
+                            issue.project.mm_link(),
+                            user.mm_link())
+    attachment.color = attachment_color
+
+    attachment.fallback = format_fallback_text(issue.project,
+                                               "Comment deleted on %s %s" % (issue.key, issue.summary),
+                                               user)
+    attachment.fields.append(AttachmentField.create("Type", issue.type))
+    attachment.fields.append(AttachmentField.create("Priority", issue.priority))
+    if issue.creator:
+        attachment.fields.append(AttachmentField.create("Creator", issue.creator.display_name))
+    if issue.assignee:
+        attachment.fields.append(AttachmentField.create("Assignee", issue.assignee.display_name))
+
+    return Message(None, attachment)
+
+def jira_issue_updated_to_message(issue, user, changelog):
+    attachment = Attachment()
+    attachment.pretext = "%s %s in %s by %s" \
+                         % ("Issue updated",
+                            issue.mm_link(),
+                            issue.project.mm_link(),
+                            user.mm_link())
+    attachment.color = attachment_color
+
+    attachment.fallback = format_text(issue.project,
+                            issue.mm_link() + " " + changelog.description(),
+                            user)
+    for item in changelog.items:
+        attachment.fields.append(AttachmentField.create("Field", item.field, short=False))
+        attachment.fields.append(AttachmentField.create("from", item.from_string))
+        attachment.fields.append(AttachmentField.create("to", item.to_string))
+
+    return Message(None, attachment)
+
+def jira_issue_event_to_message(data, logger) -> Message:
     jira_event = data["webhookEvent"]
-    issue_type = data["issue"]["fields"]["issuetype"]["name"]
-    project_key = data["issue"]["fields"]["project"]["key"]
-    project_name = data["issue"]["fields"]["project"]["name"]
-    user_key = data["user"]["key"]
-    user_display_name = data["user"]["displayName"]
+    issue = Issue.from_data(data['issue'])
+    event_user = User.from_data(data['user'])
+
+    logger.debug("jira event: %s" % jira_event)
 
     if jira_event == "jira:issue_created":
-        fields = data["issue"].get("fields", {})
-        summary = str(fields.get("summary", "-").encode('ascii', 'ignore').strip())
-        description = str(fields.get("description", "-").encode('ascii', 'ignore').strip())
-        priority = fields.get("priority", {}).get("name", "-")
-        issue_key = data["issue"]["key"]
-        text = format_text(project_key,
-                           fields.get("project", {}).get("name", "-"),
-                           format_new_issue_text("New **" + issue_type + "** created for:",
-                                                 project_key,
-                                                 issue_key,
-                                                 summary,
-                                                 description,
-                                                 priority),
-                           user_key,
-                           user_display_name)
-
-        attachment = Attachment()
-        attachment.pretext = "New issue created %s in %s by %s" \
-                             % (issue_link(project_key, issue_key, summary),
-                                project_link(project_name, project_key),
-                                user_profile_link(user_key, user_display_name))
-        attachment.color = attachment_color
-
-        description_field = AttachmentField()
-        description_field.short = False
-        description_field.title = "Description"
-        description_field.value = description
-        attachment.fields.append(description_field)
-
-        type_field = AttachmentField()
-        type_field.title = "Type"
-        type_field.value = issue_type
-        attachment.fields.append(type_field)
-
-        assignee_field = AttachmentField()
-        assignee_field.title = "Assignee"
-        assignee_field.value = user_key
-        attachment.fields.append(assignee_field)
-
-        creator_field = AttachmentField()
-        creator_field.title = "Creator"
-        creator_field.value = user_key
-        attachment.fields.append(creator_field)
-
-        priority_field = AttachmentField()
-        priority_field.title = "Priority"
-        priority_field.value = priority
-        attachment.fields.append(priority_field)
-
-        return Message(text, attachment)
+        return jira_issue_created_to_message(issue, event_user)
 
     if jira_event == "jira:issue_updated":
         issue_event_type = data["issue_event_type_name"]
-        if issue_event_type == "issue_generic" or issue_event_type == "issue_updated":
-            text = format_text(project_key,
-                               data["issue"]["fields"]["project"]["name"],
-                               issue_link(project_key, data["issue"]["key"], "") + " " + \
-                               format_changelog(data["changelog"]["items"]),
-                               data["user"]["key"],
-                               data["user"]["displayName"])
 
-        return Message(text, None)
+        logger.debug("issue event type: %s" % issue_event_type)
 
-        formatted_event_type = events.issue_events.get(issue_event_type, "")
+        if issue_event_type == "issue_assigned":
+            return jira_issue_assigned_to_message(issue, event_user)
+
+        if issue_event_type == "issue_generic" \
+                or issue_event_type == "issue_updated":
+            changelog = Changelog.from_data(data['changelog'])
+            return jira_issue_updated_to_message(issue, event_user, changelog)
+
         if issue_event_type == "issue_commented" or issue_event_type == "issue_comment_edited":
-            text = format_message(project_key,
-                                  data["issue"]["fields"]["project"]["name"],
-                                  issue_link(project_key, data["issue"]["key"], "") + " " + \
-                                  formatted_event_type + "\n" + \
-                                  "**Comment**: " + \
-                                  comment_link(data["comment"]["body"],
-                                               data["issue"]["key"],
-                                               data["comment"]["id"]),
-                                  data["user"]["key"],
-                                  data["user"]["displayName"])
-            return Message(text, None)
+            comment = Comment.from_data(data['comment'])
+            return jira_issue_commented_to_message(issue, comment, event_user)
 
         if issue_event_type == "issue_comment_deleted":
-            text = format_message(project_key,
-                                  data["issue"]["fields"]["project"]["name"],
-                                  issue_link(project_key, data["issue"]["key"], "") + " " + \
-                                  formatted_event_type,
-                                  data["user"]["key"],
-                                  data["user"]["displayName"])
-            return Message(text, None)
+            return jira_issue_comment_deleted_to_message(issue, event_user)
 
     return None
 
 
 def jira_project_event_to_message(data) -> Message:
-    project_key = data["project"]["key"]
-    jira_event_text = get_jira_event_text(data)
-    return format_text(project_key, data["project"]["name"],
-                       jira_event_text,
-                       data["project"]["projectLead"]["key"],
-                       data["project"]["projectLead"]["displayName"])
-
-
-def jira_event_to_message(data) -> Message:
+    project = Project.from_data(data['project'])
     jira_event = data["webhookEvent"]
-    jira_event_text = get_jira_event_text(data)
+    jira_event_text = get_jira_event_text(jira_event)
+    return format_text(project,
+                       jira_event_text,
+                       project.project_lead)
 
-    if len(jira_event_text) == 0:
-        """
-        Not a supported JIRA event, return None
-        and quietly go away
-        """
+
+def jira_event_to_message(data, logger) -> Message:
+    jira_event = data["webhookEvent"]
+
+    if not is_jira_event_supported(jira_event):
+        logger.warning("Received unsupported Jira event: %s" % jira_event)
         return None
 
     if jira_event.startswith("jira:issue"):
-        return jira_issue_event_to_message(data)
+        logger.info("Received Jira issue event for: %s" % data.get("issue_event_type_name", "undefined"))
+        return jira_issue_event_to_message(data, logger)
 
     if jira_event == "project_created":
+        logger.info("Received project created event")
         return jira_project_event_to_message(data)
 
     return None
 
 
 def handle_channel_hook(webhook_token, data, logger):
-    message = jira_event_to_message(data)
+    message = jira_event_to_message(data, logger)
     if message is not None:
-        webhook_url = "%s/hook/%s" % (mattermost_url, webhook_token)
-        send_webhook(webhook_url, message.text, message.attachment, logger)
+        webhook_url = "%s/hooks/%s" % (mattermost_url, webhook_token)
+        send_webhook(webhook_url, message.text if message.attachment is None else None, message.attachment, logger)
     else:
-        logger.info("Received channel webhook did not match any known events.")
+        logger.info("Received Jira event could not be transformed to Mattermost message.")
 
 
 def get_json(request, logger):
     request_json = request.get_json()
     if request_json is None or len(request_json) == 0:
-        app.logger.warning("Received a request with empty or non-JSON body")
+        logger.warning("Received a request with empty or non-JSON body")
         return None
     else:
-        app.logger.debug(json.dumps(request_json))
+        logger.debug("received request: %s" % json.dumps(request_json))
         return request_json
 
 
@@ -289,20 +468,22 @@ Flask application below
 read_config()
 
 app = Flask(__name__)
+logging.basicConfig(format='%(asctime)-15s %(message)s')
 
 
 @app.before_first_request
 def setup_logging():
-    if not app.debug:
-        app.logger.setLevel(logging.WARN)
+    if app.debug:
+        app.logger.setLevel(logging.DEBUG)
+    else:
+        app.logger.setLevel(logging.INFO)
 
 
 @app.route('/hooks/<hook_path>', methods=['POST'])
 def channel_webhook(hook_path):
     request_json = get_json(request, app.logger)
     if request_json is not None:
-        app.logger.info("Received webhook call for hook_path '%s'" % (hook_path))
-        app.logger.debug(request_json)
+        app.logger.info("Received webhook call for hook '%s'" % (hook_path))
         handle_channel_hook(hook_path, request_json, app.logger)
 
     return ""
