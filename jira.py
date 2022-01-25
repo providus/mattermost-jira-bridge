@@ -141,7 +141,7 @@ class Issue:
         return i
 
     def mm_link(self):
-        link = jira_url + "projects/" + self.project.key + "/issues/" + self.key
+        link = jira_url + "browse/" + self.key
         return "[%s %s](%s)" % (self.key, self.summary, link)
 
 
